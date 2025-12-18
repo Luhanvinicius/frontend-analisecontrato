@@ -14,10 +14,15 @@ export const api = axios.create({
 // Interceptor para adicionar token de autenticação
 api.interceptors.request.use(
   (config) => {
-    if (typeof window !== 'undefined') {
-      const token = localStorage.getItem('token');
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
+    // Verificar se está no navegador antes de acessar localStorage
+    if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+      try {
+        const token = localStorage.getItem('token');
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`;
+        }
+      } catch (e) {
+        // Ignorar erros de localStorage durante build
       }
       // Não definir Content-Type para FormData, deixar o axios definir automaticamente
       if (config.data instanceof FormData) {

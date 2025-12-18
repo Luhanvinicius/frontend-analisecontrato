@@ -32,9 +32,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     // Verificar se há token salvo e buscar perfil atualizado
     const loadUser = async () => {
-      if (typeof window !== 'undefined') {
-        const savedToken = localStorage.getItem('token')
-        const savedUser = localStorage.getItem('user')
+      // Verificar se está no navegador e não durante build
+      if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+        try {
+          const savedToken = localStorage.getItem('token')
+          const savedUser = localStorage.getItem('user')
         
         if (savedToken && savedUser) {
           setToken(savedToken)
@@ -52,6 +54,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             console.error('Erro ao buscar perfil:', error)
             // Se der erro, usar o usuário salvo mesmo
           }
+        } catch (e) {
+          // Ignorar erros durante build
         }
       }
       setIsLoading(false)
