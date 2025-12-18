@@ -1,22 +1,26 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
-import { FileText, Mail, Lock, Eye, EyeOff, Sparkles } from 'lucide-react'
+import { FileText, Mail, Lock, Eye, EyeOff, Sparkles, AlertCircle } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { LoadingSpinner } from '@/components/loading-spinner'
 import { useTheme } from '@/contexts/theme-context'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { useAuth } from '@/contexts/auth-context'
+import { useRouter as useRouterNext } from 'next/navigation'
 
 export default function LoginPage() {
   const [isLogin, setIsLogin] = useState(true)
   const [showPassword, setShowPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [mounted, setMounted] = useState(false)
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -26,28 +30,198 @@ export default function LoginPage() {
 
   const router = useRouter()
   const searchParams = useSearchParams()
-  const redirectUrl = searchParams.get('redirect') || '/'
+  const redirectUrl = searchParams.get('redirect') || '/painel'
   const { theme } = useTheme()
+  const { login, register, refreshUser } = useAuth()
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    setError('')
     setIsLoading(true)
 
-    // Simular autenticação
-    setTimeout(() => {
-      setIsLoading(false)
-      // Redirecionar para a URL especificada ou para a página inicial
+    try {
+      if (isLogin) {
+        if (!formData.email || !formData.password) {
+          setError('Por favor, preencha todos os campos')
+          setIsLoading(false)
+          return
+        }
+        await login(formData.email, formData.password)
+      } else {
+        if (!formData.name || !formData.email || !formData.password) {
+          setError('Por favor, preencha todos os campos')
+          setIsLoading(false)
+          return
+        }
+        if (formData.password !== formData.confirmPassword) {
+          setError('As senhas não coincidem')
+          setIsLoading(false)
+          return
+        }
+        if (formData.password.length < 6) {
+          setError('A senha deve ter pelo menos 6 caracteres')
+          setIsLoading(false)
+          return
+        }
+        await register(formData.name, formData.email, formData.password)
+      }
+      
       router.push(redirectUrl)
-    }, 2000)
+    } catch (err: any) {
+      let errorMessage = 'Erro ao fazer login. Verifique suas credenciais.'
+      
+      if (err.response?.data?.error) {
+        errorMessage = err.response.data.error
+      } else if (err.message) {
+        errorMessage = err.message
+      } else if (err.response?.status === 401) {
+        errorMessage = 'Email ou senha incorretos'
+      } else if (err.response?.status === 500) {
+        errorMessage = 'Erro no servidor. Tente novamente mais tarde.'
+      } else if (!err.response) {
+        errorMessage = 'Não foi possível conectar ao servidor. Verifique se o backend está rodando.'
+      }
+      
+      setError(errorMessage)
+    } finally {
+      setIsLoading(false)
+    }
   }
+
+  useEffect(() => {
+    // Carregar script do Google Identity Services apenas uma vez
+    if (typeof window === 'undefined') return
+    
+    if (document.querySelector('script[src="https://accounts.google.com/gsi/client"]')) {
+      return
+    }
+
+    const script = document.createElement('script')
+    script.src = 'https://accounts.google.com/gsi/client'
+    script.async = true
+    script.defer = true
+    document.head.appendChild(script)
+  }, [])
 
   const handleGoogleLogin = () => {
     setIsLoading(true)
-    setTimeout(() => {
+    setError('')
+
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID
+
+    if (!clientId) {
+      setError('Login com Google não configurado. Configure NEXT_PUBLIC_GOOGLE_CLIENT_ID no arquivo .env.local')
       setIsLoading(false)
-      // Redirecionar para a URL especificada ou para a página inicial
-      router.push(redirectUrl)
-    }, 1500)
+      return
+    }
+
+    // Aguardar o script do Google carregar
+    const checkGoogle = setInterval(() => {
+      if (window.google && window.google.accounts) {
+        clearInterval(checkGoogle)
+        
+        try {
+          // Usar o Google Identity Services OAuth2
+          const tokenClient = window.google.accounts.oauth2.initTokenClient({
+            client_id: clientId,
+            scope: 'openid email profile',
+            callback: async (tokenResponse: any) => {
+              try {
+                if (tokenResponse.error) {
+                  throw new Error(tokenResponse.error)
+                }
+
+                // Obter informações do usuário
+                const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                  headers: {
+                    Authorization: `Bearer ${tokenResponse.access_token}`,
+                  },
+                })
+
+                if (!userInfoResponse.ok) {
+                  throw new Error('Erro ao obter informações do usuário')
+                }
+
+                const userInfo = await userInfoResponse.json()
+
+                // Enviar para o backend
+                const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+                const backendResponse = await fetch(`${apiUrl}/auth/google`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    idToken: tokenResponse.access_token,
+                    email: userInfo.email,
+                    name: userInfo.name,
+                    picture: userInfo.picture,
+                  }),
+                })
+
+                if (!backendResponse.ok) {
+                  let errorMessage = 'Erro ao fazer login com Google'
+                  try {
+                    const errorData = await backendResponse.json()
+                    errorMessage = errorData.error || errorMessage
+                  } catch {
+                    errorMessage = `Erro ${backendResponse.status}: ${backendResponse.statusText}`
+                  }
+                  throw new Error(errorMessage)
+                }
+
+                const data = await backendResponse.json()
+                
+                if (data.token && data.user) {
+                  if (typeof window !== 'undefined') {
+                    localStorage.setItem('token', data.token)
+                    localStorage.setItem('user', JSON.stringify(data.user))
+                  }
+                  
+                  // Atualizar contexto e buscar perfil atualizado
+                  if (refreshUser) {
+                    try {
+                      await refreshUser()
+                    } catch (err) {
+                      console.error('Erro ao atualizar perfil:', err)
+                    }
+                  }
+                  
+                  // Redirecionar após salvar tudo
+                  setIsLoading(false)
+                  window.location.href = redirectUrl
+                } else {
+                  throw new Error('Resposta inválida do servidor')
+                }
+              } catch (err: any) {
+                console.error('Erro no login Google:', err)
+                setError(err.message || 'Erro ao fazer login com Google')
+                setIsLoading(false)
+              }
+            },
+          })
+
+          tokenClient.requestAccessToken()
+        } catch (err: any) {
+          console.error('Erro ao inicializar Google OAuth:', err)
+          setError('Erro ao inicializar login com Google')
+          setIsLoading(false)
+        }
+      }
+    }, 100)
+
+    // Timeout após 5 segundos
+    setTimeout(() => {
+      clearInterval(checkGoogle)
+      if (!window.google || !window.google.accounts) {
+        setError('Erro ao carregar Google Sign-In. Verifique sua conexão e tente novamente.')
+        setIsLoading(false)
+      }
+    }, 5000)
   }
 
   return (
@@ -56,18 +230,26 @@ export default function LoginPage() {
       <div className="fixed inset-0 z-0">
         <div className={`absolute inset-0 ${theme === 'dark' ? 'bg-gradient-to-br from-slate-900 via-blue-900 to-blue-800' : 'bg-gradient-to-br from-blue-50 via-white to-purple-50'}`} />
         <div className="absolute inset-0">
-          {[...Array(30)].map((_, i) => (
-            <div
-              key={i}
-              className={`absolute w-1 h-1 ${theme === 'dark' ? 'bg-white/30' : 'bg-[#1E5AA8]/30'} rounded-full animate-pulse`}
-              style={{
-                left: `${Math.random() * 100}%`,
-                top: `${Math.random() * 100}%`,
-                animationDelay: `${Math.random() * 3}s`,
-                animationDuration: `${2 + Math.random() * 3}s`
-              }}
-            />
-          ))}
+          {mounted && [...Array(30)].map((_, i) => {
+            // Gerar valores fixos baseados no índice para evitar hydration mismatch
+            const left = (i * 7.3) % 100
+            const top = (i * 11.7) % 100
+            const delay = (i * 0.3) % 3
+            const duration = 2 + (i * 0.2) % 3
+            
+            return (
+              <div
+                key={i}
+                className={`absolute w-1 h-1 ${theme === 'dark' ? 'bg-white/30' : 'bg-[#1E5AA8]/30'} rounded-full animate-pulse`}
+                style={{
+                  left: `${left}%`,
+                  top: `${top}%`,
+                  animationDelay: `${delay}s`,
+                  animationDuration: `${duration}s`
+                }}
+              />
+            )
+          })}
         </div>
       </div>
 
@@ -112,6 +294,15 @@ export default function LoginPage() {
             </CardHeader>
 
             <CardContent className="space-y-6">
+              {error && (
+                <div className={`p-4 ${theme === 'dark' ? 'bg-red-500/20 border-red-400/50' : 'bg-red-50 border-red-200'} border rounded-lg`}>
+                  <div className="flex items-center">
+                    <AlertCircle className={`w-5 h-5 mr-2 ${theme === 'dark' ? 'text-red-400' : 'text-red-600'}`} />
+                    <p className={`${theme === 'dark' ? 'text-red-300' : 'text-red-700'} font-medium`}>{error}</p>
+                  </div>
+                </div>
+              )}
+              
               {/* Google Login */}
               <div className="relative">
                 <Button 
@@ -197,6 +388,18 @@ export default function LoginPage() {
                     </button>
                   </div>
                 </div>
+
+                {/* Link para recuperar senha - apenas no modo login */}
+                {isLogin && (
+                  <div className="text-right">
+                    <Link 
+                      href="/forgot-password" 
+                      className={`text-sm ${theme === 'dark' ? 'text-white/70 hover:text-white' : 'text-gray-600 hover:text-gray-900'} transition-colors`}
+                    >
+                      Esqueceu sua senha?
+                    </Link>
+                  </div>
+                )}
 
                 {!isLogin && (
                   <div className="space-y-2">

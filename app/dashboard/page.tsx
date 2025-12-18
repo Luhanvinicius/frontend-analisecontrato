@@ -4,9 +4,10 @@ import { useState, useEffect } from 'react'
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { FileText, Download, Calendar, Clock, CheckCircle, AlertCircle, Plus } from 'lucide-react'
+import { FileText, Download, Calendar, Clock, CheckCircle, AlertCircle, Plus, Shield } from 'lucide-react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
+import { useAuth } from '@/contexts/auth-context'
 
 const mockAnalyses = [
   {
@@ -41,6 +42,7 @@ const mockAnalyses = [
 export default function DashboardPage() {
   const [analyses, setAnalyses] = useState(mockAnalyses)
   const [showSuccessMessage, setShowSuccessMessage] = useState(false)
+  const { isAdmin } = useAuth()
   
   const searchParams = useSearchParams()
   const paymentSuccess = searchParams.get('payment') === 'success'
@@ -118,6 +120,14 @@ export default function DashboardPage() {
                 Nova Análise
               </Button>
             </Link>
+            {isAdmin && (
+              <Link href="/admin">
+                <Button className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white">
+                  <Shield className="w-4 h-4 mr-2" />
+                  Painel Admin
+                </Button>
+              </Link>
+            )}
             <Button variant="outline">Sair</Button>
           </div>
         </div>

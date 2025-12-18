@@ -4,11 +4,23 @@ import { useState, useEffect } from 'react'
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { FileText, Building, TreePine, Home, Key, RefreshCw, FileCheck, Upload, Zap, Shield, Clock, CheckCircle, Sparkles, ArrowRight } from 'lucide-react'
+import { FileText, Building, TreePine, Home, Key, RefreshCw, FileCheck, Upload, Zap, Shield, Clock, CheckCircle, Sparkles, ArrowRight, QrCode, Copy, AlertCircle } from 'lucide-react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useTheme } from '@/contexts/theme-context'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { useAuth } from '@/contexts/auth-context'
+import { api } from '@/services/api'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { toast } from 'sonner'
 
 const services = [
   {
@@ -89,9 +101,20 @@ const backgroundImages = [
 
 export default function HomePage() {
   const [isVisible, setIsVisible] = useState(false)
+  const [showLoginDialog, setShowLoginDialog] = useState(false)
+  const [showQrCodeDialog, setShowQrCodeDialog] = useState(false)
+  const [qrCodeData, setQrCodeData] = useState<{ qrCode: string; pixCopyPaste: string; amount: number; tipo: string; paymentId?: string; gatewayPaymentId?: string; paymentGateway?: string } | null>(null)
+  const [isGeneratingPayment, setIsGeneratingPayment] = useState(false)
+  const [isRegisterMode, setIsRegisterMode] = useState(false)
+  const [isLoadingGoogle, setIsLoadingGoogle] = useState(false)
+  const [googleError, setGoogleError] = useState('')
+  const [isCheckingPayment, setIsCheckingPayment] = useState(false)
   const [currentImageIndex, setCurrentImageIndex] = useState(0)
+  const [hasFreeAnalysis, setHasFreeAnalysis] = useState(false)
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { theme } = useTheme()
+  const { isAuthenticated, login, register, refreshUser } = useAuth()
 
   useEffect(() => {
     setIsVisible(true)
@@ -104,10 +127,79 @@ export default function HomePage() {
     return () => clearInterval(interval)
   }, [])
 
-  const handleServiceClick = (serviceId: string) => {
-    const isLoggedIn = false // Substituir por verificação real
+  // Verificar se o usuário já usou análise gratuita esta semana
+  useEffect(() => {
+    const checkFreeAnalysis = async () => {
+      if (isAuthenticated) {
+        try {
+          const { verificarAnaliseGratuita } = await import('@/services/analise')
+          const data = await verificarAnaliseGratuita()
+          // hasFreeAnalysis do backend retorna true se PODE usar (não usou ainda)
+          // Então invertemos para saber se JÁ usou
+          setHasFreeAnalysis(!data.hasFreeAnalysis)
+        } catch (error) {
+          console.error('Erro ao verificar análise gratuita:', error)
+          setHasFreeAnalysis(false)
+        }
+      }
+    }
+    checkFreeAnalysis()
+  }, [isAuthenticated])
+
+  // Verificar se deve abrir modal de pagamento automaticamente
+  useEffect(() => {
+    const paymentParam = searchParams.get('payment')
+    const serviceParam = searchParams.get('service')
     
-    if (!isLoggedIn) {
+    if (paymentParam === 'true' && isAuthenticated && serviceParam) {
+      // Encontrar o serviço correspondente
+      const service = services.find(s => s.id === serviceParam)
+      if (service) {
+        // Mapear ID do serviço para tipo do backend
+        const tipoMap: Record<string, string> = {
+          'matricula-urbana': 'MATRICULA_URBANA',
+          'matricula-rural': 'MATRICULA_RURAL',
+          'contrato-urbano': 'CONTRATO_IMOVEL_URBANO',
+          'contrato-rural': 'CONTRATO_IMOVEL_RURAL',
+          'contrato-aluguel': 'CONTRATO_ALUGUEL',
+          'contrato-permuta': 'PERMUTA',
+          'transcricao-matricula': 'TRANSCRICAO',
+        }
+        
+        const plan = {
+          title: service.title,
+          price: service.price,
+          tipo: tipoMap[serviceParam] || serviceParam.toUpperCase()
+        }
+        
+        // Gerar pagamento automaticamente após um pequeno delay
+        setTimeout(() => {
+          generatePayment(plan)
+          // Limpar parâmetros da URL
+          router.replace('/', { scroll: false })
+        }, 500)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, isAuthenticated, router])
+
+  // Carregar script do Google Identity Services
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    
+    if (document.querySelector('script[src="https://accounts.google.com/gsi/client"]')) {
+      return
+    }
+
+    const script = document.createElement('script')
+    script.src = 'https://accounts.google.com/gsi/client'
+    script.async = true
+    script.defer = true
+    document.head.appendChild(script)
+  }, [])
+
+  const handleServiceClick = (serviceId: string) => {
+    if (!isAuthenticated) {
       router.push(`/login?redirect=/upload?service=${serviceId}`)
     } else {
       router.push(`/upload?service=${serviceId}`)
@@ -115,13 +207,251 @@ export default function HomePage() {
   }
 
   const handleMeuPainelClick = () => {
-    const isLoggedIn = false // Substituir por verificação real de login
-    
-    if (!isLoggedIn) {
+    if (!isAuthenticated) {
       router.push('/login?redirect=/painel')
     } else {
       router.push('/painel')
     }
+  }
+
+  const [selectedPlan, setSelectedPlan] = useState<{ title: string; price: number; tipo: string } | null>(null)
+
+  const handlePlanClick = async (plan: { title: string; price: number; tipo: string }) => {
+    if (!isAuthenticated) {
+      setSelectedPlan(plan)
+      setShowLoginDialog(true)
+      return
+    }
+
+    // Gerar pagamento e QR code
+    await generatePayment(plan)
+  }
+
+  const generatePayment = async (plan: { title: string; price: number; tipo: string }) => {
+    setIsGeneratingPayment(true)
+    try {
+      const response = await api.post('/api/payment/intent', {
+        tipo: plan.tipo,
+        paymentGateway: 'asaas'
+      })
+
+      if (response.data.qrCode || response.data.pixCopyPaste) {
+        setQrCodeData({
+          qrCode: response.data.qrCode || '',
+          pixCopyPaste: response.data.pixCopyPaste || '',
+          amount: response.data.amount,
+          tipo: plan.tipo,
+          paymentId: response.data.paymentId,
+          gatewayPaymentId: response.data.gatewayPaymentId || response.data.clientSecret || response.data.paymentId,
+          paymentGateway: response.data.paymentGateway || 'asaas'
+        })
+        setShowQrCodeDialog(true)
+      } else {
+        toast.error('Erro ao gerar QR code. Tente novamente.')
+      }
+    } catch (error: any) {
+      console.error('Erro ao gerar pagamento:', error)
+      const errorMessage = error.response?.data?.error || error.message || 'Erro ao gerar pagamento. Tente novamente.'
+      toast.error(errorMessage)
+    } finally {
+      setIsGeneratingPayment(false)
+    }
+  }
+
+  const handleLoginSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    const formData = new FormData(e.currentTarget)
+    const email = formData.get('email') as string
+    const password = formData.get('password') as string
+
+    try {
+      if (isRegisterMode) {
+        const name = formData.get('name') as string
+        await register(name, email, password)
+        toast.success('Cadastro realizado com sucesso!')
+      } else {
+        await login(email, password)
+        toast.success('Login realizado com sucesso!')
+      }
+      setShowLoginDialog(false)
+      setIsRegisterMode(false)
+      
+      // Se havia um plano selecionado, gerar o pagamento agora
+      if (selectedPlan) {
+        setTimeout(() => {
+          generatePayment(selectedPlan)
+        }, 500)
+      }
+    } catch (error: any) {
+      toast.error(error.response?.data?.error || 'Erro ao fazer login/cadastro')
+    }
+  }
+
+  const copyPixCode = () => {
+    if (qrCodeData?.pixCopyPaste) {
+      navigator.clipboard.writeText(qrCodeData.pixCopyPaste)
+      toast.success('Código PIX copiado!')
+    }
+  }
+
+  const checkPaymentStatus = async () => {
+    if (!qrCodeData?.paymentId || !qrCodeData?.gatewayPaymentId || !qrCodeData?.paymentGateway) {
+      toast.error('Dados de pagamento incompletos')
+      return
+    }
+
+    setIsCheckingPayment(true)
+    try {
+      const response = await api.post('/api/payment/confirm', {
+        paymentId: qrCodeData.paymentId,
+        gatewayPaymentId: qrCodeData.gatewayPaymentId,
+        paymentGateway: qrCodeData.paymentGateway
+      })
+
+      if (response.data.payment?.status === 'completed') {
+        toast.success('Pagamento confirmado com sucesso!')
+        setShowQrCodeDialog(false)
+        // Redirecionar para o painel
+        router.push('/painel?payment=success')
+      } else {
+        toast.error('Pagamento ainda não foi confirmado. Tente novamente em alguns instantes.')
+      }
+    } catch (error: any) {
+      console.error('Erro ao verificar pagamento:', error)
+      const errorMessage = error.response?.data?.error || 'Erro ao verificar pagamento'
+      if (errorMessage.includes('não confirmado')) {
+        toast.error('Pagamento ainda não foi confirmado. Aguarde alguns instantes e tente novamente.')
+      } else {
+        toast.error(errorMessage)
+      }
+    } finally {
+      setIsCheckingPayment(false)
+    }
+  }
+
+  const handleGoogleLogin = () => {
+    setIsLoadingGoogle(true)
+    setGoogleError('')
+
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID
+
+    if (!clientId) {
+      setGoogleError('Login com Google não configurado. Configure NEXT_PUBLIC_GOOGLE_CLIENT_ID no arquivo .env.local')
+      setIsLoadingGoogle(false)
+      return
+    }
+
+    // Aguardar o script do Google carregar
+    const checkGoogle = setInterval(() => {
+      if (typeof window !== 'undefined' && window.google && window.google.accounts) {
+        clearInterval(checkGoogle)
+        
+        try {
+          // Usar o Google Identity Services OAuth2
+          const tokenClient = window.google.accounts.oauth2.initTokenClient({
+            client_id: clientId,
+            scope: 'openid email profile',
+            callback: async (tokenResponse: any) => {
+              try {
+                if (tokenResponse.error) {
+                  throw new Error(tokenResponse.error)
+                }
+
+                // Obter informações do usuário
+                const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                  headers: {
+                    Authorization: `Bearer ${tokenResponse.access_token}`,
+                  },
+                })
+
+                if (!userInfoResponse.ok) {
+                  throw new Error('Erro ao obter informações do usuário')
+                }
+
+                const userInfo = await userInfoResponse.json()
+
+                // Enviar para o backend
+                const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+                const backendResponse = await fetch(`${apiUrl}/auth/google`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    idToken: tokenResponse.access_token,
+                    email: userInfo.email,
+                    name: userInfo.name,
+                    picture: userInfo.picture,
+                  }),
+                })
+
+                if (!backendResponse.ok) {
+                  let errorMessage = 'Erro ao fazer login com Google'
+                  try {
+                    const errorData = await backendResponse.json()
+                    errorMessage = errorData.error || errorMessage
+                  } catch {
+                    errorMessage = `Erro ${backendResponse.status}: ${backendResponse.statusText}`
+                  }
+                  throw new Error(errorMessage)
+                }
+
+                const data = await backendResponse.json()
+                
+                if (data.token && data.user) {
+                  if (typeof window !== 'undefined') {
+                    localStorage.setItem('token', data.token)
+                    localStorage.setItem('user', JSON.stringify(data.user))
+                  }
+                  
+                  // Atualizar contexto e buscar perfil atualizado
+                  if (refreshUser) {
+                    try {
+                      await refreshUser()
+                    } catch (err) {
+                      console.error('Erro ao atualizar perfil:', err)
+                    }
+                  }
+                  
+                  // Fechar modal e continuar com o fluxo de pagamento
+                  setIsLoadingGoogle(false)
+                  setShowLoginDialog(false)
+                  toast.success('Login com Google realizado com sucesso!')
+                  
+                  // Se havia um plano selecionado, gerar o pagamento agora
+                  if (selectedPlan) {
+                    setTimeout(() => {
+                      generatePayment(selectedPlan)
+                    }, 500)
+                  }
+                } else {
+                  throw new Error('Resposta inválida do servidor')
+                }
+              } catch (err: any) {
+                console.error('Erro no login Google:', err)
+                setGoogleError(err.message || 'Erro ao fazer login com Google')
+                setIsLoadingGoogle(false)
+              }
+            },
+          })
+
+          tokenClient.requestAccessToken()
+        } catch (err: any) {
+          console.error('Erro ao inicializar Google OAuth:', err)
+          setGoogleError('Erro ao inicializar login com Google')
+          setIsLoadingGoogle(false)
+        }
+      }
+    }, 100)
+
+    // Timeout após 5 segundos
+    setTimeout(() => {
+      clearInterval(checkGoogle)
+      if (typeof window === 'undefined' || !window.google || !window.google.accounts) {
+        setGoogleError('Erro ao carregar Google Sign-In. Verifique sua conexão e tente novamente.')
+        setIsLoadingGoogle(false)
+      }
+    }, 5000)
   }
 
   return (
@@ -251,15 +581,15 @@ export default function HomePage() {
                     </CardHeader>
                     <CardContent className="pt-0">
                       <div className="flex items-center justify-center">
-                        {service.free ? (
+                        {service.free && !hasFreeAnalysis ? (
                           <Badge className={`${
                             theme === 'dark' 
                               ? 'bg-green-500/20 text-green-300 border border-green-400/30' 
                               : 'bg-green-600 text-white border border-green-700 shadow-lg'
                           }`}>
-                            Grátis 1x/dia
+                            Grátis 1x/semana
                           </Badge>
-                        ) : (
+                        ) : service.free && hasFreeAnalysis ? null : (
                           <Badge className={`${
                             theme === 'dark' 
                               ? 'bg-[#1E5AA8]/20 text-[#2B6BC0] border border-[#1E5AA8]/30' 
@@ -384,6 +714,7 @@ export default function HomePage() {
                 title: 'Análise de Matrícula',
                 subtitle: 'Urbana e Rural',
                 price: 14.99,
+                tipo: 'analise-matricula',
                 icon: FileText,
                 gradient: 'from-[#1E5AA8] to-[#2B6BC0]',
                 features: ['Análise completa de ônus', 'Relatório em PDF', 'Resultado em segundos'],
@@ -393,6 +724,7 @@ export default function HomePage() {
                 title: 'Análise de Contrato',
                 subtitle: 'Todos os tipos',
                 price: 9.99,
+                tipo: 'analise-contrato',
                 icon: FileCheck,
                 gradient: 'from-green-500 to-emerald-500',
                 features: ['Análise de cláusulas perigosas', 'Identificação de riscos', 'GRÁTIS 1x por dia!'],
@@ -402,6 +734,7 @@ export default function HomePage() {
                 title: 'Análise de Transcrição de Matricula',
                 subtitle: 'Análise especializada',
                 price: 19.99,
+                tipo: 'analise-transcricao',
                 icon: FileText,
                 gradient: 'from-purple-500 to-pink-500',
                 features: ['Análise histórica', 'Verificação de origem', 'Relatório especializado'],
@@ -464,8 +797,12 @@ export default function HomePage() {
                       ))}
                     </ul>
                     
-                    <Button className={`w-full bg-gradient-to-r ${plan.gradient} hover:opacity-90 shadow-lg text-lg py-6 hover:scale-105 transition-all duration-300`}>
-                      Começar Agora
+                    <Button 
+                      onClick={() => handlePlanClick(plan)}
+                      disabled={isGeneratingPayment}
+                      className={`w-full bg-gradient-to-r ${plan.gradient} hover:opacity-90 shadow-lg text-lg py-6 hover:scale-105 transition-all duration-300`}
+                    >
+                      {isGeneratingPayment ? 'Gerando pagamento...' : 'Começar Agora'}
                     </Button>
                   </CardContent>
                 </Card>
@@ -532,6 +869,197 @@ export default function HomePage() {
           </div>
         </div>
       </footer>
+
+      {/* Dialog de Login/Cadastro */}
+      <Dialog open={showLoginDialog} onOpenChange={setShowLoginDialog}>
+        <DialogContent className={theme === 'dark' ? 'bg-gray-900 text-white' : ''}>
+          <DialogHeader>
+            <DialogTitle className={theme === 'dark' ? 'text-white' : ''}>
+              Login ou Cadastro
+            </DialogTitle>
+            <DialogDescription className={theme === 'dark' ? 'text-gray-300' : ''}>
+              Faça login ou crie uma conta para continuar
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* Google Login */}
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleGoogleLogin}
+            disabled={isLoadingGoogle}
+            className={`w-full h-12 ${theme === 'dark' ? 'text-white border-white/20 hover:bg-white/10' : 'text-gray-700 border-gray-300 hover:bg-gray-50'} text-sm transition-all duration-200`}
+          >
+            {isLoadingGoogle ? (
+              <div className="flex items-center justify-center">
+                <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
+                <span>Carregando...</span>
+              </div>
+            ) : (
+              <div className="flex items-center justify-center">
+                <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                </svg>
+                Continuar com Google
+              </div>
+            )}
+          </Button>
+
+          {googleError && (
+            <div className={`p-3 rounded-lg ${theme === 'dark' ? 'bg-red-900/30 text-red-300' : 'bg-red-50 text-red-700'}`}>
+              <p className="text-sm">{googleError}</p>
+            </div>
+          )}
+
+          <div className="relative">
+            <div className={`absolute inset-0 flex items-center ${theme === 'dark' ? 'border-white/20' : 'border-gray-300'}`}>
+              <div className={`w-full border-t ${theme === 'dark' ? 'border-white/20' : 'border-gray-300'}`}></div>
+            </div>
+            <div className="relative flex justify-center text-sm">
+              <span className={`px-2 ${theme === 'dark' ? 'bg-gray-900 text-white/70' : 'bg-white text-gray-500'}`}>ou</span>
+            </div>
+          </div>
+
+          <form onSubmit={handleLoginSubmit} className="space-y-4">
+            {isRegisterMode && (
+              <div>
+                <Label htmlFor="name" className={theme === 'dark' ? 'text-white' : ''}>
+                  Nome completo
+                </Label>
+                <Input
+                  id="name"
+                  name="name"
+                  type="text"
+                  required={isRegisterMode}
+                  className={theme === 'dark' ? 'bg-gray-800 text-white border-gray-700' : ''}
+                  placeholder="Seu nome completo"
+                />
+              </div>
+            )}
+            <div>
+              <Label htmlFor="email" className={theme === 'dark' ? 'text-white' : ''}>
+                Email
+              </Label>
+              <Input
+                id="email"
+                name="email"
+                type="email"
+                required
+                className={theme === 'dark' ? 'bg-gray-800 text-white border-gray-700' : ''}
+                placeholder="seu@email.com"
+              />
+            </div>
+            <div>
+              <Label htmlFor="password" className={theme === 'dark' ? 'text-white' : ''}>
+                Senha
+              </Label>
+              <Input
+                id="password"
+                name="password"
+                type="password"
+                required
+                className={theme === 'dark' ? 'bg-gray-800 text-white border-gray-700' : ''}
+                placeholder="Sua senha"
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button
+                type="submit"
+                className="flex-1 bg-[#1E5AA8] hover:bg-[#164A96] text-white"
+              >
+                {isRegisterMode ? 'Cadastrar' : 'Login'}
+              </Button>
+              <Button
+                type="button"
+                onClick={() => setIsRegisterMode(!isRegisterMode)}
+                variant="outline"
+                className="flex-1"
+              >
+                {isRegisterMode ? 'Já tenho conta' : 'Criar conta'}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog de QR Code */}
+      <Dialog open={showQrCodeDialog} onOpenChange={setShowQrCodeDialog}>
+        <DialogContent className={`max-w-md ${theme === 'dark' ? 'bg-gray-900 text-white' : ''}`}>
+          <DialogHeader>
+            <DialogTitle className={theme === 'dark' ? 'text-white' : ''}>
+              Pagamento via PIX
+            </DialogTitle>
+            <DialogDescription className={theme === 'dark' ? 'text-gray-300' : ''}>
+              Escaneie o QR code ou copie o código PIX para pagar
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {qrCodeData && (
+              <>
+                <div className="text-center">
+                  <p className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'} mb-2`}>
+                    R$ {qrCodeData.amount.toFixed(2)}
+                  </p>
+                </div>
+                {qrCodeData.qrCode && (
+                  <div className="flex justify-center p-4 bg-white rounded-lg">
+                    <img 
+                      src={`data:image/png;base64,${qrCodeData.qrCode}`} 
+                      alt="QR Code PIX" 
+                      className="w-64 h-64"
+                    />
+                  </div>
+                )}
+                {qrCodeData.pixCopyPaste && (
+                  <div className="space-y-2">
+                    <Label className={theme === 'dark' ? 'text-white' : ''}>
+                      Código PIX (Copiar e Colar)
+                    </Label>
+                    <div className="flex gap-2">
+                      <Input
+                        value={qrCodeData.pixCopyPaste}
+                        readOnly
+                        className={theme === 'dark' ? 'bg-gray-800 text-white border-gray-700' : ''}
+                      />
+                      <Button
+                        onClick={copyPixCode}
+                        variant="outline"
+                        size="icon"
+                        className={theme === 'dark' ? 'border-gray-700 hover:bg-gray-800' : ''}
+                      >
+                        <Copy className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                <p className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-600'} text-center mb-4`}>
+                  Após realizar o pagamento, clique no botão abaixo para confirmar
+                </p>
+                <Button
+                  onClick={checkPaymentStatus}
+                  disabled={isCheckingPayment}
+                  className="w-full bg-green-600 hover:bg-green-700 text-white"
+                >
+                  {isCheckingPayment ? (
+                    <div className="flex items-center justify-center">
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
+                      Verificando pagamento...
+                    </div>
+                  ) : (
+                    <>
+                      <CheckCircle className="w-5 h-5 mr-2" />
+                      Já paguei - Confirmar pagamento
+                    </>
+                  )}
+                </Button>
+              </>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

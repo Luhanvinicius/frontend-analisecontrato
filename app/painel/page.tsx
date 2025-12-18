@@ -4,75 +4,77 @@ import { useState, useEffect } from 'react'
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { FileText, Download, Calendar, Clock, CheckCircle, AlertCircle, Plus, Sparkles, Zap, TrendingUp, LogOut } from 'lucide-react'
+import { FileText, Download, Calendar, Clock, CheckCircle, AlertCircle, Plus, Sparkles, Zap, TrendingUp, LogOut, Shield } from 'lucide-react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useTheme } from '@/contexts/theme-context'
 import { ThemeToggle } from '@/components/theme-toggle'
-
-const mockAnalyses = [
-  {
-    id: '1',
-    type: 'Matrícula Urbana',
-    fileName: 'matricula_apartamento_centro.pdf',
-    date: '2024-01-15',
-    status: 'completed',
-    result: 'Aprovado - Sem ônus encontrados',
-    downloadUrl: '#',
-    gradient: 'from-blue-500 to-cyan-500'
-  },
-  {
-    id: '2',
-    type: 'Contrato Rural',
-    fileName: 'contrato_fazenda_interior.pdf',
-    date: '2024-01-14',
-    status: 'completed',
-    result: 'Atenção - Cláusula de revisão identificada',
-    downloadUrl: '#',
-    gradient: 'from-green-500 to-emerald-500'
-  },
-  {
-    id: '3',
-    type: 'Transcrição de Matrícula',
-    fileName: 'transcricao_casa_praia.pdf',
-    date: '2024-01-13',
-    status: 'processing',
-    result: 'Processando...',
-    downloadUrl: null,
-    gradient: 'from-purple-500 to-pink-500'
-  }
-]
+import { useAuth } from '@/contexts/auth-context'
+import { buscarHistoricoAnalises } from '@/services/analise'
+import { api } from '@/services/api'
 
 export default function PainelPage() {
-  const [analyses, setAnalyses] = useState(mockAnalyses)
+  const [analyses, setAnalyses] = useState<any[]>([])
   const [showSuccessMessage, setShowSuccessMessage] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
   const { theme } = useTheme()
+  const { logout, isAdmin } = useAuth()
   
   const searchParams = useSearchParams()
   const paymentSuccess = searchParams.get('payment') === 'success'
   const processedService = searchParams.get('processed')
 
   useEffect(() => {
+    carregarAnalises()
+  }, [])
+
+  const carregarAnalises = async () => {
+    try {
+      setIsLoading(true)
+      const dados = await buscarHistoricoAnalises()
+      setAnalyses(dados)
+    } catch (error) {
+      console.error('Erro ao carregar análises:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleDownload = async (analysisId: string) => {
+    try {
+      const response = await api.get(`/api/analise/${analysisId}/download`, {
+        responseType: 'blob',
+      })
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]))
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', `relatorio_${analysisId}.pdf`)
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('Erro ao baixar relatório:', error)
+      alert('Erro ao baixar relatório')
+    }
+  }
+
+  const handleLogout = () => {
+    logout()
+    window.location.href = '/'
+  }
+
+  useEffect(() => {
     if (paymentSuccess || processedService) {
       setShowSuccessMessage(true)
-      const newAnalysis = {
-        id: Date.now().toString(),
-        type: processedService ? 'Análise Gratuita' : 'Análise Paga',
-        fileName: 'documento_recente.pdf',
-        date: new Date().toISOString().split('T')[0],
-        status: 'processing' as const,
-        result: 'Processando...',
-        downloadUrl: null,
-        gradient: 'from-blue-500 to-purple-500'
-      }
-      setAnalyses(prev => [newAnalysis, ...prev])
-
+      carregarAnalises()
       setTimeout(() => {
-        setAnalyses(prev => prev.map(analysis => 
-          analysis.id === newAnalysis.id 
-            ? { ...analysis, status: 'completed' as const, result: 'Análise concluída com sucesso', downloadUrl: '#' }
-            : analysis
-        ))
+        setShowSuccessMessage(false)
+        // Limpar parâmetro da URL após mostrar mensagem
+        if (paymentSuccess) {
+          window.history.replaceState({}, '', '/painel')
+        }
       }, 5000)
     }
   }, [paymentSuccess, processedService])
@@ -144,9 +146,21 @@ export default function PainelPage() {
                 <div className="absolute -inset-1 bg-gradient-to-r from-[#1E5AA8] to-[#2B6BC0] rounded-lg blur opacity-0 hover:opacity-40 transition-opacity duration-300 -z-10" />
               </div>
             </Link>
+            {isAdmin && (
+              <Link href="/admin">
+                <div className="relative">
+                  <Button className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white shadow-lg hover:scale-110 transition-all duration-300 border-0">
+                    <Shield className="w-5 h-5 mr-2" />
+                    Painel Admin
+                  </Button>
+                  <div className="absolute -inset-1 bg-gradient-to-r from-purple-600 to-indigo-600 rounded-lg blur opacity-0 hover:opacity-40 transition-opacity duration-300 -z-10" />
+                </div>
+              </Link>
+            )}
             <div className="relative">
               <Button 
                 variant="outline" 
+                onClick={handleLogout}
                 className={`relative overflow-hidden transition-all duration-300 border-0 bg-red-500 hover:bg-red-600 text-white hover:scale-110 hover:shadow-xl`}
               >
                 <div className="absolute inset-0 bg-gradient-to-r from-red-500 to-red-600 opacity-0 hover:opacity-100 transition-opacity duration-300" />
@@ -207,7 +221,6 @@ export default function PainelPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className={`text-lg font-medium ${theme === 'dark' ? 'text-white/70' : 'text-gray-600'}`}>Concluídas</p>
-                  <p className="text-4xl font-bold text-green-400}`}>Concluídas</p>
                   <p className="text-4xl font-bold text-green-400">
                     {analyses.filter(a => a.status === 'completed').length}
                   </p>
@@ -254,7 +267,12 @@ export default function PainelPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {analyses.length === 0 ? (
+            {isLoading ? (
+              <div className="text-center py-16">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#1E5AA8] mx-auto"></div>
+                <p className={`mt-4 ${theme === 'dark' ? 'text-white/70' : 'text-gray-600'}`}>Carregando análises...</p>
+              </div>
+            ) : analyses.length === 0 ? (
               <div className="text-center py-16">
                 <div className="relative mb-8">
                   <FileText className={`w-20 h-20 ${theme === 'dark' ? 'text-white/30' : 'text-gray-300'} mx-auto`} />
@@ -291,15 +309,15 @@ export default function PainelPage() {
                         </div>
                         <div>
                           <h3 className={`font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'} text-xl`}>
-                            {analysis.type}
+                            {analysis.tipo || analysis.type}
                           </h3>
                           <p className={`${theme === 'dark' ? 'text-white/70' : 'text-gray-600'} text-lg`}>
-                            {analysis.fileName}
+                            {analysis.file_name || analysis.fileName}
                           </p>
                           <div className="flex items-center space-x-6 mt-3">
                             <div className={`flex items-center ${theme === 'dark' ? 'text-white/60' : 'text-gray-500'}`}>
                               <Calendar className="w-5 h-5 mr-2" />
-                              {new Date(analysis.date).toLocaleDateString('pt-BR')}
+                              {new Date(analysis.created_at || analysis.date).toLocaleDateString('pt-BR')}
                             </div>
                             {getStatusBadge(analysis.status)}
                           </div>
@@ -308,19 +326,14 @@ export default function PainelPage() {
                       <div className="flex items-center space-x-4">
                         <div className="text-right">
                           <p className={`text-lg font-medium ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
-                            {analysis.result}
+                            {analysis.status === 'completed' ? 'Análise concluída' : analysis.status === 'processing' ? 'Processando...' : analysis.status || 'Pendente'}
                           </p>
                         </div>
-                        {analysis.downloadUrl && analysis.status === 'completed' && (
+                        {analysis.status === 'completed' && (
                           <div className="relative">
                             <Button
                               className="bg-green-500 hover:bg-green-600 text-white shadow-lg hover:scale-105 transition-all duration-300"
-                              onClick={() => {
-                                const link = document.createElement('a')
-                                link.href = '/placeholder.pdf'
-                                link.download = `relatorio_${analysis.id}.pdf`
-                                link.click()
-                              }}
+                              onClick={() => handleDownload(analysis.id)}
                             >
                               <Download className="w-5 h-5 mr-2" />
                               Baixar PDF
