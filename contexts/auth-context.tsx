@@ -38,21 +38,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const savedToken = localStorage.getItem('token')
           const savedUser = localStorage.getItem('user')
         
-        if (savedToken && savedUser) {
-          setToken(savedToken)
-          setUser(JSON.parse(savedUser))
-          
-          // Buscar perfil atualizado do servidor para garantir que o role está correto
-          try {
-            const response = await api.get('/auth/profile')
-            if (response.data?.user) {
-              const updatedUser = response.data.user
-              setUser(updatedUser)
-              localStorage.setItem('user', JSON.stringify(updatedUser))
+          if (savedToken && savedUser) {
+            setToken(savedToken)
+            setUser(JSON.parse(savedUser))
+            
+            // Buscar perfil atualizado do servidor para garantir que o role está correto
+            try {
+              const response = await api.get('/auth/profile')
+              if (response.data?.user) {
+                const updatedUser = response.data.user
+                setUser(updatedUser)
+                localStorage.setItem('user', JSON.stringify(updatedUser))
+              }
+            } catch (error) {
+              console.error('Erro ao buscar perfil:', error)
+              // Se der erro, usar o usuário salvo mesmo
             }
-          } catch (error) {
-            console.error('Erro ao buscar perfil:', error)
-            // Se der erro, usar o usuário salvo mesmo
           }
         } catch (e) {
           // Ignorar erros durante build
