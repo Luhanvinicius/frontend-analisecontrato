@@ -1,0 +1,52 @@
+===========================================
+VARIÁVEIS DE AMBIENTE PARA O VERCEL
+===========================================
+
+Configure estas variáveis no Vercel:
+Settings > Environment Variables
+
+-------------------------------------------
+1. NEXT_PUBLIC_API_URL
+-------------------------------------------
+Valor: https://seu-backend.railway.app
+(ou a URL do seu backend no Render/Railway)
+
+⚠️ IMPORTANTE: 
+- Substitua pela URL real do seu backend
+- Não coloque barra "/" no final
+- Você obterá esta URL após fazer deploy do backend
+
+-------------------------------------------
+2. NEXT_PUBLIC_GOOGLE_CLIENT_ID
+-------------------------------------------
+Valor: seu_client_id.apps.googleusercontent.com
+
+Como obter:
+1. Acesse: https://console.cloud.google.com
+2. Crie um projeto ou selecione existente
+3. Vá em: APIs & Services > Credentials
+4. Clique em: Create Credentials > OAuth client ID
+5. Configure:
+   - Application type: Web application
+   - Authorized JavaScript origins:
+     * http://localhost:3000 (dev)
+     * https://seu-projeto.vercel.app (prod)
+   - Authorized redirect URIs:
+     * http://localhost:3000 (dev)
+     * https://seu-projeto.vercel.app (prod)
+6. Copie o Client ID gerado
+
+===========================================
+RESUMO RÁPIDO
+===========================================
+
+No Vercel, adicione:
+
+NEXT_PUBLIC_API_URL = https://seu-backend.railway.app
+NEXT_PUBLIC_GOOGLE_CLIENT_ID = seu_client_id.apps.googleusercontent.com
+
+✅ Configure para: Production, Preview e Development
+✅ Após adicionar, faça um novo deploy
+
+===========================================
+
